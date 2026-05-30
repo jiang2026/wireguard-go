@@ -36,6 +36,8 @@ var (
 type StdNetBind struct {
 	externalControl     control.Func
 	reservedForEndpoint map[netip.AddrPort][3]uint8
+	bindAddr4           string
+	bindAddr6           string
 
 	mu            sync.Mutex // protects all fields except as specified
 	ipv4          *net.UDPConn
@@ -56,9 +58,15 @@ type StdNetBind struct {
 }
 
 func NewStdNetBind(externalControl control.Func) Bind {
+	return NewStdNetBindWithBindAddress(externalControl, "", "")
+}
+
+func NewStdNetBindWithBindAddress(externalControl control.Func, bindAddr4, bindAddr6 string) Bind {
 	return &StdNetBind{
 		externalControl:     externalControl,
 		reservedForEndpoint: make(map[netip.AddrPort][3]uint8),
+		bindAddr4:           bindAddr4,
+		bindAddr6:           bindAddr6,
 
 		udpAddrPool: sync.Pool{
 			New: func() any {
@@ -127,9 +135,11 @@ func (e *StdNetEndpoint) DstToString() string {
 	return e.AddrPort.String()
 }
 
-func listenNet(externalControl control.Func, network string, port int) (*net.UDPConn, int, error) {
+func listenNet(externalControl control.Func, network string, bindAddr string, port int) (*net.UDPConn, int, error) {
 	var listenerAddr string
-	if network == "udp6" {
+	if bindAddr != "" {
+		listenerAddr = net.JoinHostPort(bindAddr, strconv.Itoa(port))
+	} else if network == "udp6" {
 		listenerAddr = "[::]:" + strconv.Itoa(port)
 	} else {
 		listenerAddr = ":" + strconv.Itoa(port)
@@ -190,13 +200,13 @@ again:
 	var v4pc *ipv4.PacketConn
 	var v6pc *ipv6.PacketConn
 
-	v4conn, port, err = listenNet(s.externalControl, "udp4", port)
+	v4conn, port, err = listenNet(s.externalControl, "udp4", s.bindAddr4, port)
 	if err != nil && !errors.Is(err, syscall.EAFNOSUPPORT) {
 		return nil, 0, err
 	}
 
 	// Listen on the same port as we're using for ipv4.
-	v6conn, port, err = listenNet(s.externalControl, "udp6", port)
+	v6conn, port, err = listenNet(s.externalControl, "udp6", s.bindAddr6, port)
 	if uport == 0 && errors.Is(err, errEADDRINUSE) && tries < 100 {
 		v4conn.Close()
 		tries++
